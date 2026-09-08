@@ -71,6 +71,7 @@ export const annualitiesService = {
     situacao = "",
     contaReceber = "TODOS",
     whatsapp = "TODOS",
+    boleto = "TODOS",
     numeroPagina = 1,
     tamanhoPagina = 20,
   } = {}) {
@@ -91,6 +92,8 @@ export const annualitiesService = {
     if (contaReceber === "SEM_CONTA") params.possuiContaReceber = false;
     if (whatsapp === "ENVIADA") params.mensagemEnviada = true;
     if (whatsapp === "NAO_ENVIADA") params.mensagemEnviada = false;
+    if (boleto === "COM_BOLETO") params.boletoGerado = true;
+    if (boleto === "SEM_BOLETO") params.boletoGerado = false;
 
     const response = await api.get("/anuidades", { params });
     const payload = response.data ?? {};

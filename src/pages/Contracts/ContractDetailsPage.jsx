@@ -22,7 +22,7 @@ import {
   UsersRound,
   XCircle,
 } from "lucide-react";
-import { Link, useParams } from "react-router";
+import { Link, useLocation, useParams } from "react-router";
 
 import { Modal } from "../../components/ui/Modal";
 import { useAuth } from "../../contexts/AuthContext";
@@ -1096,9 +1096,14 @@ function ParticipantTypeBadge({ participant }) {
 }
 
 function BackLink() {
+  // A listagem manda os filtros aplicados no state — devolvemos a pessoa
+  // pra mesma busca em vez de uma lista zerada.
+  const location = useLocation();
+  const listSearch = location.state?.listSearch ?? "";
+
   return (
     <Link
-      to="/contratos"
+      to={`/contratos${listSearch}`}
       className="inline-flex items-center gap-2 text-sm font-bold text-[#5d276d] transition hover:text-[#341366]"
     >
       <ArrowLeft size={18} />

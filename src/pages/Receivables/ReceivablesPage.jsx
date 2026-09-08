@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { Link } from "react-router";
 
+import { useFiltrosNaUrl } from "../../hooks/useFiltrosNaUrl";
+
 import { Pagination } from "../../components/ui/Pagination";
 import { getApiErrorMessage } from "../../services/apiError";
 import { receivablesService } from "../../services/receivablesService";
@@ -56,9 +58,15 @@ const dateFormatter = new Intl.DateTimeFormat("pt-BR", {
 });
 
 export function ReceivablesPage() {
-  const [filters, setFilters] = useState(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
-  const [currentPage, setCurrentPage] = useState(1);
+  const {
+    filters,
+    setFilters,
+    appliedFilters,
+    setAppliedFilters,
+    currentPage,
+    setCurrentPage,
+    listSearch,
+  } = useFiltrosNaUrl(initialFilters);
   const [reloadToken, setReloadToken] = useState(0);
   const [result, setResult] = useState(initialResult);
   const [isLoading, setIsLoading] = useState(true);
@@ -346,8 +354,8 @@ export function ReceivablesPage() {
           <EmptyState hasFilters={hasAppliedFilters} onClear={clearFilters} />
         ) : (
           <>
-            <ReceivablesTable receivables={result.items} />
-            <ReceivablesCards receivables={result.items} />
+            <ReceivablesTable receivables={result.items} listSearch={listSearch} />
+            <ReceivablesCards receivables={result.items} listSearch={listSearch} />
             <Pagination
               currentPage={result.numeroPagina ?? currentPage}
               totalPages={Math.max(result.totalPaginas ?? 1, 1)}
@@ -378,7 +386,7 @@ function Alert({ title, children }) {
   );
 }
 
-function ReceivablesTable({ receivables }) {
+function ReceivablesTable({ receivables, listSearch }) {
   return (
     <div className="hidden overflow-x-auto xl:block">
       <table className="w-full border-collapse">
@@ -398,7 +406,7 @@ function ReceivablesTable({ receivables }) {
               <td className="px-5 py-4"><SituationBadge value={receivable.situacao} /></td>
               <td className="px-5 py-4"><BooleanBadge value={receivable.boletoGerado} positive="Gerado" negative="Não gerado" /></td>
               <td className="px-5 py-4"><PaymentBadge paid={receivable.pago} /></td>
-              <td className="px-5 py-4"><DetailsLink receivableId={receivable.id} /></td>
+              <td className="px-5 py-4"><DetailsLink receivableId={receivable.id} backSearch={listSearch} /></td>
             </tr>
           ))}
         </tbody>
@@ -407,7 +415,7 @@ function ReceivablesTable({ receivables }) {
   );
 }
 
-function ReceivablesCards({ receivables }) {
+function ReceivablesCards({ receivables, listSearch }) {
   return (
     <div className="divide-y divide-[#f0ecf2] xl:hidden">
       {receivables.map((receivable) => (
@@ -420,7 +428,7 @@ function ReceivablesCards({ receivables }) {
             <Information label="Situação" value={receivable.situacao || "Não informada"} />
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-2"><Links receivable={receivable} /><BooleanBadge value={receivable.boletoGerado} positive="Boleto gerado" negative="Sem boleto" /></div>
-          <DetailsLink receivableId={receivable.id} fullWidth />
+          <DetailsLink receivableId={receivable.id} fullWidth backSearch={listSearch} />
         </article>
       ))}
     </div>
@@ -450,10 +458,13 @@ function SmallLink({ to, label }) {
   return <Link to={to} className="rounded-lg border border-[#e2dbe5] bg-white px-2.5 py-1.5 text-[11px] font-bold text-[#653475] transition hover:border-[#432059] hover:bg-[#f8f4fa]">{label}</Link>;
 }
 
-function DetailsLink({ receivableId, fullWidth = false }) {
+function DetailsLink({ receivableId, fullWidth = false, backSearch = "" }) {
   return (
     <Link
       to={`/contas-receber/${receivableId}`}
+      // Leva a busca atual junto, pro "Voltar" da tela de detalhes
+      // devolver a listagem como estava.
+      state={{ listSearch: backSearch }}
       className={`inline-flex h-10 items-center justify-center rounded-xl border border-[#dcd4df] px-4 text-xs font-bold text-[#5d276d] transition hover:border-[#432059] hover:bg-[#f8f4fa] ${fullWidth ? "mt-4 w-full" : ""}`}
     >
       Detalhes

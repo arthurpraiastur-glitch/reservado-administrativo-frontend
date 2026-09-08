@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { Link } from "react-router";
 
+import { useFiltrosNaUrl } from "../../hooks/useFiltrosNaUrl";
+
 import { Modal } from "../../components/ui/Modal";
 import { Pagination } from "../../components/ui/Pagination";
 import { useAuth } from "../../contexts/AuthContext";
@@ -46,9 +48,15 @@ const initialResult = {
 
 export function ContractsPage() {
   const { hasPermission } = useAuth();
-  const [filters, setFilters] = useState(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
-  const [currentPage, setCurrentPage] = useState(1);
+  const {
+    filters,
+    setFilters,
+    appliedFilters,
+    setAppliedFilters,
+    currentPage,
+    setCurrentPage,
+    listSearch,
+  } = useFiltrosNaUrl(initialFilters);
   const [reloadToken, setReloadToken] = useState(0);
   const [result, setResult] = useState(initialResult);
   const [isLoading, setIsLoading] = useState(true);
@@ -477,7 +485,7 @@ export function ContractsPage() {
                         />
                       </td>
                       <td className="px-5 py-4 text-right">
-                        <DetailsLink contractId={contract.id} />
+                        <DetailsLink contractId={contract.id} backSearch={listSearch} />
                       </td>
                     </tr>
                   ))}
@@ -528,7 +536,7 @@ export function ContractsPage() {
                       )}
                     />
                   </div>
-                  <DetailsLink contractId={contract.id} mobile />
+                  <DetailsLink contractId={contract.id} mobile backSearch={listSearch} />
                 </article>
               ))}
             </div>
@@ -730,10 +738,13 @@ function GenerationIssues({ title, items, color }) {
   );
 }
 
-function DetailsLink({ contractId, mobile = false }) {
+function DetailsLink({ contractId, mobile = false, backSearch = "" }) {
   return (
     <Link
       to={`/contratos/${contractId}`}
+      // Leva a busca atual junto, pro "Voltar" da tela de detalhes
+      // devolver a listagem como estava.
+      state={{ listSearch: backSearch }}
       className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#ddd5e0] px-4 text-xs font-bold text-[#5d276d] transition hover:border-[#432059] hover:bg-[#f8f4fa] ${
         mobile ? "mt-4 w-full" : ""
       }`}

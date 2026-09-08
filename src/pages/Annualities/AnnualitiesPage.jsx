@@ -22,6 +22,7 @@ import { Link, useLocation, useNavigate } from "react-router";
 import { ContractPicker } from "../../components/ui/ContractPicker";
 import { Modal } from "../../components/ui/Modal";
 import { Pagination } from "../../components/ui/Pagination";
+import { useFiltrosNaUrl } from "../../hooks/useFiltrosNaUrl";
 import { useAuth } from "../../contexts/AuthContext";
 import { annualitiesService } from "../../services/annualitiesService";
 import { getApiErrorMessage } from "../../services/apiError";
@@ -34,7 +35,9 @@ const initialFilters = {
   situacao: "",
   contaReceber: "TODOS",
   whatsapp: "TODOS",
+  boleto: "TODOS",
 };
+
 const initialResult = {
   items: [],
   totalRegistros: 0,
@@ -60,9 +63,15 @@ export function AnnualitiesPage() {
   const { hasPermission } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const [filters, setFilters] = useState(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
-  const [currentPage, setCurrentPage] = useState(1);
+  const {
+    filters,
+    setFilters,
+    appliedFilters,
+    setAppliedFilters,
+    currentPage,
+    setCurrentPage,
+    listSearch,
+  } = useFiltrosNaUrl(initialFilters);
   const [reloadToken, setReloadToken] = useState(0);
   const [result, setResult] = useState(initialResult);
   const [isLoading, setIsLoading] = useState(true);
@@ -98,6 +107,15 @@ export function AnnualitiesPage() {
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState("");
 
+  const [showGenerateSelectedModal, setShowGenerateSelectedModal] =
+    useState(false);
+  const [isGeneratingSelected, setIsGeneratingSelected] = useState(false);
+  const [generateSelectedError, setGenerateSelectedError] = useState("");
+  const [generateSelectedProgress, setGenerateSelectedProgress] = useState({
+    done: 0,
+    total: 0,
+  });
+
   const canGenerateAnnualities = hasPermission("ANUIDADES_VISUALIZAR");
   const canGenerateBoletos = hasPermission("ANUIDADES_CRIAR");
   // Disparo de WhatsApp é uma ação de escrita (cria item no Bitrix e
@@ -110,7 +128,11 @@ export function AnnualitiesPage() {
     // pra cá) — mostra uma vez só e limpa o state pra não reaparecer num F5.
     if (location.state?.flashMessage) {
       setOperationMessage(location.state.flashMessage);
-      navigate(location.pathname, { replace: true, state: {} });
+      // Mantém a query string ao limpar o state — ela carrega os filtros.
+      navigate(
+        { pathname: location.pathname, search: location.search },
+        { replace: true, state: {} },
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
@@ -313,12 +335,24 @@ export function AnnualitiesPage() {
     }
   }
 
-  const sendableIds = result.items
-    .filter((annuality) => annuality.boletoGerado)
-    .map((annuality) => annuality.id);
-  const allSendableSelected =
-    sendableIds.length > 0 &&
-    sendableIds.every((id) => selectedAnnualityIds.includes(id));
+  // A seleção aceita qualquer linha da página. O que muda é o destino: as
+  // anuidades que já têm boleto seguem pro envio por WhatsApp, e as que
+  // estão "Sem boleto" seguem pra geração — que antes só dava pra fazer
+  // uma a uma, entrando em cada anuidade.
+  const selectableIds = result.items.map((annuality) => annuality.id);
+  const allSelectableSelected =
+    selectableIds.length > 0 &&
+    selectableIds.every((id) => selectedAnnualityIds.includes(id));
+
+  const selectedAnnualities = result.items.filter((annuality) =>
+    selectedAnnualityIds.includes(annuality.id),
+  );
+  const selectedComBoleto = selectedAnnualities.filter(
+    (annuality) => annuality.boletoGerado,
+  );
+  const selectedSemBoleto = selectedAnnualities.filter(
+    (annuality) => !annuality.boletoGerado,
+  );
 
   function toggleAnnualitySelection(annualityId) {
     setSelectedAnnualityIds((current) =>
@@ -328,8 +362,8 @@ export function AnnualitiesPage() {
     );
   }
 
-  function toggleSelectAllSendable() {
-    setSelectedAnnualityIds(allSendableSelected ? [] : sendableIds);
+  function toggleSelectAllSelectable() {
+    setSelectedAnnualityIds(allSelectableSelected ? [] : selectableIds);
   }
 
   function openSendModal() {
@@ -343,8 +377,77 @@ export function AnnualitiesPage() {
     setSendError("");
   }
 
+  function openGenerateSelectedModal() {
+    setGenerateSelectedError("");
+    setGenerateSelectedProgress({ done: 0, total: selectedSemBoleto.length });
+    setShowGenerateSelectedModal(true);
+  }
+
+  function closeGenerateSelectedModal() {
+    if (isGeneratingSelected) return;
+    setShowGenerateSelectedModal(false);
+    setGenerateSelectedError("");
+  }
+
+  // Gera os boletos das anuidades "Sem boleto" uma a uma, reaproveitando a
+  // mesma rota que o botão "Gerar boleto" da tela de detalhes já usa. É
+  // sequencial de propósito: cada anuidade conversa com a Omie, e mandar
+  // todas numa requisição só faria a chamada estourar o tempo limite do
+  // navegador em lotes maiores. Uma falha não interrompe o lote — ela é
+  // registrada e o restante continua.
+  async function handleGerarBoletosSelecionados() {
+    if (selectedSemBoleto.length === 0) return;
+
+    setIsGeneratingSelected(true);
+    setGenerateSelectedError("");
+    setOperationMessage("");
+    setOperationErrors([]);
+    setOperationAlreadyExisting([]);
+    setGenerateSelectedProgress({ done: 0, total: selectedSemBoleto.length });
+
+    const erros = [];
+    let gerados = 0;
+
+    for (const annuality of selectedSemBoleto) {
+      try {
+        await annualitiesService.gerarBoleto(annuality.id);
+        gerados += 1;
+      } catch (error) {
+        erros.push({
+          contratoId: `anuidade-${annuality.id}`,
+          numero: annuality.numeroContrato,
+          letra: annuality.letraContrato,
+          motivo: getApiErrorMessage(
+            error,
+            "Não foi possível gerar o boleto.",
+          ),
+        });
+      } finally {
+        setGenerateSelectedProgress((current) => ({
+          ...current,
+          done: current.done + 1,
+        }));
+      }
+    }
+
+    setOperationMessage(
+      `${gerados} de ${selectedSemBoleto.length} ` +
+        `${
+          selectedSemBoleto.length === 1
+            ? "boleto foi gerado"
+            : "boletos foram gerados"
+        }` +
+        `${erros.length > 0 ? ` (${erros.length} com erro — veja abaixo)` : ""}.`,
+    );
+    setOperationErrors(erros);
+    setShowGenerateSelectedModal(false);
+    setSelectedAnnualityIds([]);
+    setIsGeneratingSelected(false);
+    setReloadToken((current) => current + 1);
+  }
+
   async function handleSendBoletosEmMassa() {
-    if (selectedAnnualityIds.length === 0) return;
+    if (selectedComBoleto.length === 0) return;
 
     setIsSending(true);
     setSendError("");
@@ -354,7 +457,7 @@ export function AnnualitiesPage() {
 
     try {
       const sent = await annualitiesService.enviarBoletosEmMassa(
-        selectedAnnualityIds,
+        selectedComBoleto.map((annuality) => annuality.id),
       );
 
       setOperationMessage(
@@ -410,14 +513,24 @@ export function AnnualitiesPage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-3">
-          {canSendBoletos && selectedAnnualityIds.length > 0 && (
+          {canGenerateBoletos && selectedSemBoleto.length > 0 && (
+            <button
+              type="button"
+              onClick={openGenerateSelectedModal}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#432059] px-4 text-sm font-bold text-white transition hover:bg-[#341846]"
+            >
+              <Banknote size={18} />
+              Gerar boletos selecionados ({selectedSemBoleto.length})
+            </button>
+          )}
+          {canSendBoletos && selectedComBoleto.length > 0 && (
             <button
               type="button"
               onClick={openSendModal}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white transition hover:bg-emerald-700"
             >
               <MessageCircle size={18} />
-              Enviar boletos selecionados ({selectedAnnualityIds.length})
+              Enviar boletos selecionados ({selectedComBoleto.length})
             </button>
           )}
           {canGenerateBoletos && (
@@ -568,6 +681,11 @@ export function AnnualitiesPage() {
             <option value="ENVIADA">Já enviada</option>
             <option value="NAO_ENVIADA">Não enviada</option>
           </select>
+          <select name="boleto" value={filters.boleto} onChange={handleFilterChange} className="h-12 rounded-xl border border-[#ded8e2] bg-white px-3 text-sm font-semibold text-[#5d5361] outline-none transition focus:border-[#432059] focus:ring-4 focus:ring-[#432059]/10">
+            <option value="TODOS">Todos os boletos</option>
+            <option value="COM_BOLETO">Com boleto</option>
+            <option value="SEM_BOLETO">Sem boleto</option>
+          </select>
           <div className="flex gap-2 md:col-span-2 xl:col-span-6 xl:justify-end">
             <button type="submit" className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#432059] px-5 text-sm font-bold text-white transition hover:bg-[#341366] xl:flex-none">
               <Search size={18} />
@@ -591,14 +709,14 @@ export function AnnualitiesPage() {
               <table className="w-full border-collapse">
                 <thead className="bg-[#faf8fb]">
                   <tr>
-                    {canSendBoletos && (
+                    {(canSendBoletos || canGenerateBoletos) && (
                       <TableHeading>
                         <input
                           type="checkbox"
-                          checked={allSendableSelected}
-                          onChange={toggleSelectAllSendable}
-                          disabled={sendableIds.length === 0}
-                          aria-label="Selecionar todas as anuidades com boleto gerado"
+                          checked={allSelectableSelected}
+                          onChange={toggleSelectAllSelectable}
+                          disabled={selectableIds.length === 0}
+                          aria-label="Selecionar todas as anuidades da página"
                           className="h-4 w-4 rounded border-[#ded8e2] accent-[#432059]"
                         />
                       </TableHeading>
@@ -617,15 +735,14 @@ export function AnnualitiesPage() {
                 <tbody className="divide-y divide-[#f0ecf2]">
                   {result.items.map((annuality) => (
                     <tr key={annuality.id} className="transition hover:bg-[#fcfafc]">
-                      {canSendBoletos && (
+                      {(canSendBoletos || canGenerateBoletos) && (
                         <td className="px-5 py-4">
                           <input
                             type="checkbox"
                             checked={selectedAnnualityIds.includes(annuality.id)}
                             onChange={() => toggleAnnualitySelection(annuality.id)}
-                            disabled={!annuality.boletoGerado}
-                            aria-label={`Selecionar anuidade ${annuality.id} para envio`}
-                            className="h-4 w-4 rounded border-[#ded8e2] accent-[#432059] disabled:cursor-not-allowed disabled:opacity-40"
+                            aria-label={`Selecionar anuidade ${annuality.id}`}
+                            className="h-4 w-4 rounded border-[#ded8e2] accent-[#432059]"
                           />
                         </td>
                       )}
@@ -642,7 +759,7 @@ export function AnnualitiesPage() {
                         />
                       </td>
                       <td className="px-5 py-4 text-sm font-semibold text-[#615766]">{formatDateTime(annuality.criadoEm)}</td>
-                      <td className="px-5 py-4 text-right"><AnnualityDetailsLink annualityId={annuality.id} /></td>
+                      <td className="px-5 py-4 text-right"><AnnualityDetailsLink annualityId={annuality.id} backSearch={listSearch} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -653,14 +770,13 @@ export function AnnualitiesPage() {
                 <article key={annuality.id} className="p-5">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-3">
-                      {canSendBoletos && (
+                      {(canSendBoletos || canGenerateBoletos) && (
                         <input
                           type="checkbox"
                           checked={selectedAnnualityIds.includes(annuality.id)}
                           onChange={() => toggleAnnualitySelection(annuality.id)}
-                          disabled={!annuality.boletoGerado}
-                          aria-label={`Selecionar anuidade ${annuality.id} para envio`}
-                          className="h-4 w-4 shrink-0 rounded border-[#ded8e2] accent-[#432059] disabled:cursor-not-allowed disabled:opacity-40"
+                          aria-label={`Selecionar anuidade ${annuality.id}`}
+                          className="h-4 w-4 shrink-0 rounded border-[#ded8e2] accent-[#432059]"
                         />
                       )}
                       <AnnualityIdentity annuality={annuality} />
@@ -680,7 +796,7 @@ export function AnnualitiesPage() {
                       hasBoleto={annuality.boletoGerado}
                     />
                   </div>
-                  <AnnualityDetailsLink annualityId={annuality.id} mobile />
+                  <AnnualityDetailsLink annualityId={annuality.id} mobile backSearch={listSearch} />
                 </article>
               ))}
             </div>
@@ -843,6 +959,99 @@ export function AnnualitiesPage() {
       </Modal>
 
       <Modal
+        open={showGenerateSelectedModal}
+        onClose={closeGenerateSelectedModal}
+        title="Gerar boletos das anuidades selecionadas"
+        description="Gera o boleto na Omie de cada anuidade selecionada que ainda não tem um. Ao final da geração, o boleto já sai pelo WhatsApp."
+        maxWidth="max-w-lg"
+      >
+        <div className="space-y-5 px-5 py-6 sm:px-6">
+          <div className="flex items-start gap-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+            <AlertTriangle size={22} className="mt-0.5 shrink-0" />
+            <p className="text-sm leading-6 text-amber-800">
+              As anuidades são processadas uma de cada vez, porque cada uma
+              conversa com a Omie. Se alguma falhar, o restante continua e o
+              erro dela aparece no resumo no fim. Não feche a página durante
+              o processo.
+            </p>
+          </div>
+
+          <p className="text-sm leading-6 text-[#615766]">
+            <span className="font-bold text-[#342b37]">
+              {selectedSemBoleto.length}
+            </span>{" "}
+            {selectedSemBoleto.length === 1
+              ? "anuidade sem boleto selecionada"
+              : "anuidades sem boleto selecionadas"}
+            .
+          </p>
+
+          {isGeneratingSelected && generateSelectedProgress.total > 0 && (
+            <div>
+              <div className="flex items-center justify-between text-sm font-semibold text-[#615766]">
+                <span>Gerando boletos...</span>
+                <span>
+                  {generateSelectedProgress.done} de{" "}
+                  {generateSelectedProgress.total}
+                </span>
+              </div>
+              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-[#efe9f2]">
+                <div
+                  className="h-full rounded-full bg-[#432059] transition-all"
+                  style={{
+                    width: `${Math.round(
+                      (generateSelectedProgress.done /
+                        generateSelectedProgress.total) *
+                        100,
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {generateSelectedError && (
+            <div
+              role="alert"
+              className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700"
+            >
+              <XCircle size={19} className="mt-0.5 shrink-0" />
+              <p className="text-sm leading-6">{generateSelectedError}</p>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col-reverse gap-3 border-t border-[#eee9f0] bg-[#fcfafc] px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+          <button
+            type="button"
+            onClick={closeGenerateSelectedModal}
+            disabled={isGeneratingSelected}
+            className="h-11 rounded-xl border border-[#dad3dd] px-5 text-sm font-bold text-[#675d6b] transition hover:border-[#bfaec6] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Voltar
+          </button>
+          <button
+            type="button"
+            onClick={handleGerarBoletosSelecionados}
+            disabled={isGeneratingSelected || selectedSemBoleto.length === 0}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#432059] px-5 text-sm font-bold text-white transition hover:bg-[#341846] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isGeneratingSelected ? (
+              <>
+                <LoaderCircle size={18} className="animate-spin" />
+                Gerando...
+              </>
+            ) : (
+              <>
+                <Banknote size={17} />
+                Gerar boletos
+              </>
+            )}
+          </button>
+        </div>
+      </Modal>
+
+      <Modal
         open={showSendModal}
         onClose={closeSendModal}
         title="Enviar boletos pelo WhatsApp"
@@ -861,11 +1070,11 @@ export function AnnualitiesPage() {
 
           <p className="text-sm leading-6 text-[#615766]">
             <span className="font-bold text-[#342b37]">
-              {selectedAnnualityIds.length}
+              {selectedComBoleto.length}
             </span>{" "}
-            {selectedAnnualityIds.length === 1
-              ? "anuidade selecionada"
-              : "anuidades selecionadas"}
+            {selectedComBoleto.length === 1
+              ? "anuidade com boleto selecionada"
+              : "anuidades com boleto selecionadas"}
             .
           </p>
 
@@ -892,7 +1101,7 @@ export function AnnualitiesPage() {
           <button
             type="button"
             onClick={handleSendBoletosEmMassa}
-            disabled={isSending || selectedAnnualityIds.length === 0}
+            disabled={isSending || selectedComBoleto.length === 0}
             className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSending ? (
@@ -951,9 +1160,11 @@ function formatDateTime(value) {
   }).format(date);
 }
 
-function AnnualityDetailsLink({ annualityId, mobile = false }) {
+function AnnualityDetailsLink({ annualityId, mobile = false, backSearch = "" }) {
   return (
-    <Link to={`/anuidades/${annualityId}`} className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#ddd5e0] px-4 text-xs font-bold text-[#5d276d] transition hover:border-[#432059] hover:bg-[#f8f4fa] ${mobile ? "mt-4 w-full" : ""}`}>
+    // Leva os filtros atuais junto, pra que o "Voltar para anuidades" da
+    // tela de detalhes devolva a listagem exatamente como estava.
+    <Link to={`/anuidades/${annualityId}`} state={{ listSearch: backSearch }} className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#ddd5e0] px-4 text-xs font-bold text-[#5d276d] transition hover:border-[#432059] hover:bg-[#f8f4fa] ${mobile ? "mt-4 w-full" : ""}`}>
       <ReceiptText size={16} />
       Detalhes
     </Link>

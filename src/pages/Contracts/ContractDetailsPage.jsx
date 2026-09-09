@@ -30,6 +30,15 @@ import { annualitiesService } from "../../services/annualitiesService";
 import { getApiErrorMessage } from "../../services/apiError";
 import { contractsService } from "../../services/contractsService";
 
+// `contrato.ativo` é um campo do banco que nunca é reescrito por nenhum
+// sync com a Omie (fica congelado desde a importação) — por isso ele podia
+// mostrar "Inativo" para um contrato com situação "Ativo" vinda da Omie.
+// O selo passa a se basear na própria situação, que é o campo realmente
+// atualizado.
+function contratoEstaAtivo(situacao) {
+  return (situacao ?? "").trim().toLowerCase() === "ativo";
+}
+
 const PARTICIPANT_TYPE_LABELS = {
   TITULAR: "Titular",
   COTITULAR: "Co-titular",
@@ -401,7 +410,7 @@ export function ContractDetailsPage() {
                 <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.13em] text-white/75">
                   Contrato #{contract.id}
                 </span>
-                <StatusBadge active={contract.ativo} />
+                <StatusBadge active={contratoEstaAtivo(contract.situacao)} />
               </div>
               <h2 className="mt-4 text-3xl font-bold tracking-[-0.035em] sm:text-4xl">
                 {completeNumber || "Contrato sem número"}

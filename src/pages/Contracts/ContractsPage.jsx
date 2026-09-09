@@ -18,6 +18,15 @@ import {
 } from "lucide-react";
 import { Link } from "react-router";
 
+// `contrato.ativo` é um campo do banco que nunca é reescrito por nenhum
+// sync com a Omie (fica congelado desde a importação) — por isso ele podia
+// mostrar "Inativo" para um contrato com situação "Ativo" vinda da Omie.
+// O selo passa a se basear na própria situação, que é o campo realmente
+// atualizado.
+function contratoEstaAtivo(situacao) {
+  return (situacao ?? "").trim().toLowerCase() === "ativo";
+}
+
 import { useFiltrosNaUrl } from "../../hooks/useFiltrosNaUrl";
 
 import { Modal } from "../../components/ui/Modal";
@@ -121,7 +130,9 @@ export function ContractsPage() {
 
   const pageStatistics = useMemo(
     () => ({
-      active: result.items.filter((contract) => contract.ativo).length,
+      active: result.items.filter((contract) =>
+        contratoEstaAtivo(contract.situacao),
+      ).length,
       withAnnuality: result.items.filter(
         (contract) => contract.possuiAnuidade,
       ).length,
@@ -476,7 +487,9 @@ export function ContractsPage() {
                         <SituationBadge value={contract.situacao} />
                       </td>
                       <td className="px-5 py-4">
-                        <StatusBadge active={contract.ativo} />
+                        <StatusBadge
+                          active={contratoEstaAtivo(contract.situacao)}
+                        />
                       </td>
                       <td className="px-5 py-4">
                         <AnnualityBadge
@@ -514,7 +527,9 @@ export function ContractsPage() {
                   )}
                   <div className="flex items-start justify-between gap-3">
                     <ContractIdentity contract={contract} />
-                    <StatusBadge active={contract.ativo} />
+                    <StatusBadge
+                      active={contratoEstaAtivo(contract.situacao)}
+                    />
                   </div>
                   <div className="mt-4">
                     <ContractHolder holder={contract.titular} mobile />
